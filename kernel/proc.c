@@ -267,6 +267,58 @@ int fork(void) {
   return pid;
 }
 
+const char* state2str(enum procstate s) {
+  switch (s)
+  {
+    case UNUSED: return "UNUSED";
+    case SLEEPING: return "SLEEPING";
+    case RUNNABLE: return "RUNNABLE";
+    case RUNNING: return "RUNNING";
+    case ZOMBIE: return "ZOMBIE";
+    default: return "UNKNOWN";
+  }
+}
+
+void print_exit(struct proc *p) {
+  // proc PID exit, parent pid PID, name NAME, state STATE
+  struct proc *parent = p->parent;
+  exit_info("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, parent->pid, parent->name, state2str(parent->state));
+
+  // proc PID exit, child CHILD_NUM, pid PID, name NAME, state STATE
+  struct proc *pp;
+  int child_cnt = 0;
+  for (pp = proc; pp < &proc[NPROC]; pp++) {
+    if (pp->parent == p) {
+      exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n", p->pid, child_cnt++, pp->pid, pp->name, state2str(pp->state));
+    }
+  }
+}
+
+void print_yield(struct proc *p) {
+  // print out the kernel trap save address range
+  printf(
+    "Save the context of the process to the memory region from address %p to %p\n",
+    (uint64)(&p->context),
+    (uint64)(&p->context) + sizeof(struct context)
+  );
+
+  // print out current proc user info
+  printf(
+    "Current running process pid is %d and user pc is %p\n",
+    p->pid,
+    p->trapframe->epc
+  );
+
+  // search for next runable proc
+  struct proc *pp;
+  for (pp = proc; pp < &proc[NPROC]; pp++) {
+    if (pp->state == RUNNABLE) {
+      printf("Next runnable process pid is %d and user pc is %p\n", pp->pid, pp->trapframe->epc);
+      break;
+    }
+  }
+}
+
 // Pass p's abandoned children to init.
 // Caller must hold p->lock.
 void reparent(struct proc *p) {
@@ -298,6 +350,8 @@ void exit(int status) {
   struct proc *p = myproc();
 
   if (p == initproc) panic("init exiting");
+
+  print_exit(p);
 
   // Close all open files.
   for (int fd = 0; fd < NOFILE; fd++) {
@@ -356,7 +410,7 @@ void exit(int status) {
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr, int flag) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -364,6 +418,12 @@ int wait(uint64 addr) {
   // hold p->lock for the whole time to avoid lost
   // wakeups from a child's exit().
   acquire(&p->lock);
+
+  // if async flags, no need to wait for child exit
+  if (flag) {
+    release(&p->lock);
+    return -1;
+  }
 
   for (;;) {
     // Scan through table looking for exited children.
