@@ -419,12 +419,6 @@ int wait(uint64 addr, int flag) {
   // wakeups from a child's exit().
   acquire(&p->lock);
 
-  // if async flags, no need to wait for child exit
-  if (flag) {
-    release(&p->lock);
-    return -1;
-  }
-
   for (;;) {
     // Scan through table looking for exited children.
     havekids = 0;
@@ -456,6 +450,13 @@ int wait(uint64 addr, int flag) {
 
     // No point waiting if we don't have any children.
     if (!havekids || p->killed) {
+      release(&p->lock);
+      return -1;
+    }
+
+    // have kids but no one is zombie
+    // if async flags, no need to wait for child exit
+    if (flag) {
       release(&p->lock);
       return -1;
     }
