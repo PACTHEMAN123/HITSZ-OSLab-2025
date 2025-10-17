@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "user.h": "c",
+        "atomic": "c",
+        "condition_variable": "c",
+        "future": "c",
+        "mutex": "c",
+        "proc.h": "c",
+        "defs.h": "c"
+    }
+}
