@@ -97,6 +97,48 @@ uint64 walkaddr(pagetable_t pagetable, uint64 va) {
   return pa;
 }
 
+// print a single node
+// the node should be valid!
+void printnode(pte_t pte, int level, int idx, uint64 va) {
+  for (int i = 0; i < level + 1; i++) {
+    printf("||");
+    if (i != level) printf("   ");
+  }
+  // print the addr
+  if (pte & (PTE_R|PTE_W|PTE_X)) {
+    printf("idx: %d: va: %p -> pa: %p,", idx, va, PTE2PA(pte));
+  } else {
+    printf("idx: %d: pa: %p,", idx, PTE2PA(pte));
+  }
+  // print the flag
+  char *r = (pte & PTE_R) ? "r" : "-";
+  char *w = (pte & PTE_W) ? "w" : "-";
+  char *x = (pte & PTE_X) ? "x" : "-";
+  char *u = (pte & PTE_U) ? "u" : "-";
+  printf(" flags: %s%s%s%s\n", r, w, x, u);
+}
+
+// recursive walk and print
+void printwalk(pagetable_t pagetable, int level, uint64 va) {
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    uint64 cur_va = va | (((uint64)i << ((2-level)*9))<<12);
+    if ((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      uint64 child = PTE2PA(pte);
+      printnode(pte, level, i, cur_va);
+      printwalk((pagetable_t)child, level + 1, cur_va);
+    } else if (pte & PTE_V) {
+      printnode(pte, level, i, cur_va);
+    }
+  }
+}
+
+// pretty print a page table
+void vmprint(pagetable_t pagetable) {
+  printf("page table %p\n", pagetable);
+  printwalk(pagetable, 0, 0);
+}
+
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
