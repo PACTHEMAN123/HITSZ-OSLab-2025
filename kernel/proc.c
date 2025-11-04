@@ -37,6 +37,7 @@ void procinit(void) {
     uint64 va = KSTACK((int)(p - proc));
     kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
     p->kstack = va;
+    p->kstack_pa = (uint64)pa;
   }
   kvminithart();
 }
@@ -97,6 +98,12 @@ static struct proc *allocproc(void) {
 found:
   p->pid = allocpid();
 
+  // Allocate and Init the kernel page table
+  p->k_pagetable = kvmcreate();
+
+  // Map the kernel stack
+  taskkvmmap(p->k_pagetable, p->kstack, p->kstack_pa, PGSIZE, PTE_R | PTE_W);
+
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
     release(&p->lock);
@@ -127,6 +134,7 @@ static void freeproc(struct proc *p) {
   if (p->trapframe) kfree((void *)p->trapframe);
   p->trapframe = 0;
   if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
+  if (p->k_pagetable) kvmfree(p->k_pagetable);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -430,7 +438,15 @@ void scheduler(void) {
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        // switch kernel page table carefully
+        w_satp(MAKE_SATP(p->k_pagetable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
+
+        // Process finish runing, resume global kernel page table
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.

@@ -45,6 +45,65 @@ void kvminit() {
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 }
 
+/**
+ * map task kernel vm space
+ */
+void taskkvmmap(pagetable_t k_pagetable, uint64 va, uint64 pa, uint64 sz, int perm) {
+  if (mappages(k_pagetable, va, sz, pa, perm) != 0) panic("task kvmmap");
+}
+
+/**
+ * create page table for each task's kernel
+ */
+pagetable_t kvmcreate() {
+  pagetable_t k_pagetable = (pagetable_t)kalloc();
+  memset(k_pagetable, 0, PGSIZE);
+
+  // uart registers
+  taskkvmmap(k_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  taskkvmmap(k_pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  // taskkvmmap(k_pagetable,CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  taskkvmmap(k_pagetable,PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  taskkvmmap(k_pagetable, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  taskkvmmap(k_pagetable, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  taskkvmmap(k_pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  return k_pagetable;
+}
+
+/**
+ * free page table for each task's kernel
+ * should not free the phy frame pointed by leaf
+ * since they might using by other tasks
+ */
+void kvmfree(pagetable_t k_pagetable) {
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = k_pagetable[i];
+    if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      kvmfree((pagetable_t)child);
+      k_pagetable[i] = 0;
+    } else if (pte & PTE_V) {
+      // leaf, simply cleanup pte
+      k_pagetable[i] = 0;
+    }
+  }
+  kfree((void *)k_pagetable);
+}
+
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 void kvminithart() {
