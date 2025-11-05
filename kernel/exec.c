@@ -97,6 +97,9 @@ int exec(char *path, char **argv) {
   p->trapframe->sp = sp;          // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
 
+  // sync new user page table to kernel page table
+  sync_pagetable(p->pagetable, p->k_pagetable);
+
   if (p->pid == 1)
     vmprint(p->pagetable);
 

@@ -210,6 +210,8 @@ void userinit(void) {
 
   p->state = RUNNABLE;
 
+  sync_pagetable(p->pagetable, p->k_pagetable);
+
   release(&p->lock);
 }
 
@@ -228,6 +230,8 @@ int growproc(int n) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+  // update kernel page table
+  sync_pagetable(p->pagetable, p->k_pagetable);
   return 0;
 }
 
@@ -269,6 +273,9 @@ int fork(void) {
   pid = np->pid;
 
   np->state = RUNNABLE;
+
+  // update child's task kernel page table
+  sync_pagetable(np->pagetable, np->k_pagetable);
 
   release(&np->lock);
 

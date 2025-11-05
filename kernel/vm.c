@@ -84,24 +84,67 @@ pagetable_t kvmcreate() {
 }
 
 /**
- * free page table for each task's kernel
- * should not free the phy frame pointed by leaf
- * since they might using by other tasks
+ * recursive walker to free kernel page table.
+ * should not free user space area, 
+ * since they have already freed.
  */
-void kvmfree(pagetable_t k_pagetable) {
+void kvmfreewalk(pagetable_t k_pagetable, int level, int last_idx) {
   for (int i = 0; i < 512; i++) {
     pte_t pte = k_pagetable[i];
     if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
       // this PTE points to a lower-level page table.
       uint64 child = PTE2PA(pte);
-      kvmfree((pagetable_t)child);
-      k_pagetable[i] = 0;
-    } else if (pte & PTE_V) {
-      // leaf, simply cleanup pte
-      k_pagetable[i] = 0;
+      if (level == 1 && i < 96 && last_idx == 0) {} // skip user space
+      else kvmfreewalk((pagetable_t)child, level + 1, i);
     }
+    k_pagetable[i] = 0;
   }
   kfree((void *)k_pagetable);
+}
+
+/**
+ * free page table for each task's kernel
+ * should not free the phy frame pointed by leaf
+ * since they might using by other tasks.
+ */
+void kvmfree(pagetable_t k_pagetable) {
+  kvmfreewalk(k_pagetable, 0, 0);
+}
+
+/**
+ * sync user and kernel's paga table
+ * by sharing same leaf.
+ * use overwrite.
+ */
+void sync_pagetable(pagetable_t u_pagetable, pagetable_t k_pagetable) {
+  pte_t u_pte0 = u_pagetable[0];
+  pte_t k_pte0 = k_pagetable[0];
+
+  if ((u_pte0 & PTE_V) == 0 && (k_pte0 & PTE_V) == 0)
+    return;
+
+  // handle either is invalid
+  if ((u_pte0 & PTE_V) == 0 && (k_pte0 & PTE_V) != 0) {
+    kvmfreewalk((pagetable_t)(PTE2PA(k_pte0)), 1, 0);
+    return;
+  }
+
+  else if ((u_pte0 & PTE_V) != 0 && (k_pte0 & PTE_V) == 0) {
+    pagetable_t pg = (pte_t *)kalloc();
+    memset(pg, 0, PGSIZE);
+    k_pagetable[0] = PA2PTE(pg) | PTE_V;
+  }
+
+  pagetable_t u_pgtbl = (pagetable_t)(PTE2PA(u_pagetable[0]));
+  pagetable_t k_pgtbl = (pagetable_t)(PTE2PA(k_pagetable[0]));
+  // user space: [0x0, 0xc000_0000]
+  // total using 96 L1 page tables
+  for (int i = 0; i < 96; i++) {
+    pte_t u_pte = u_pgtbl[i];
+    // remove the U signed !
+    pte_t k_pte = u_pte & ~PTE_U; 
+    k_pgtbl[i] = k_pte;
+  }
 }
 
 // Switch h/w page table register to the kernel's page table,
@@ -417,21 +460,10 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
 int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len) {
-  uint64 n, va0, pa0;
-
-  while (len > 0) {
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if (pa0 == 0) return -1;
-    n = PGSIZE - (srcva - va0);
-    if (n > len) n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
-
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  w_sstatus(r_sstatus() | SSTATUS_SUM);
+  int ret = copyin_new(pagetable, dst, srcva, len);
+  w_sstatus(r_sstatus() & ~SSTATUS_SUM);
+  return ret;
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -439,38 +471,10 @@ int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len) {
 // until a '\0', or max.
 // Return 0 on success, -1 on error.
 int copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max) {
-  uint64 n, va0, pa0;
-  int got_null = 0;
-
-  while (got_null == 0 && max > 0) {
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if (pa0 == 0) return -1;
-    n = PGSIZE - (srcva - va0);
-    if (n > max) n = max;
-
-    char *p = (char *)(pa0 + (srcva - va0));
-    while (n > 0) {
-      if (*p == '\0') {
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
-
-    srcva = va0 + PGSIZE;
-  }
-  if (got_null) {
-    return 0;
-  } else {
-    return -1;
-  }
+  w_sstatus(r_sstatus() | SSTATUS_SUM);
+  int ret = copyinstr_new(pagetable, dst, srcva, max);
+  w_sstatus(r_sstatus() & ~SSTATUS_SUM);
+  return ret;
 }
 
 // check if use global kpgtbl or not
